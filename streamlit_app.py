@@ -172,7 +172,11 @@ if need_new_window:
 
 st.markdown('#### Treatment window')
 st.caption(f'เวลาที่กำหนดสำหรับเคสนี้: {window_sec} วินาที')
-st.autorefresh(interval=1000, key=f'primary_cd_row_{sheet_row}')
+# Fallback autorefresh for Streamlit Cloud older versions
+if hasattr(st, 'autorefresh'):
+    st.autorefresh(interval=1000, key=f'primary_cd_row_{sheet_row}')
+else:
+    st.markdown("<meta http-equiv='refresh' content='1'>", unsafe_allow_html=True)
 now2 = datetime.now(timezone.utc)
 remaining_sec = 0 if (deadline_dt is None) else max(0, int((deadline_dt - now2).total_seconds()))
 mm, ss = divmod(remaining_sec, 60)
