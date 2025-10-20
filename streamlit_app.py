@@ -137,23 +137,26 @@ token = sign_token(payload, secret)
 st.markdown('#### Treatment window (client-side countdown)')
 st.caption(f'เวลาที่กำหนดสำหรับเคสนี้: {window_sec} วินาที')
 
-# Pure JS countdown (no Streamlit reruns)
-st.markdown("""
+# JavaScript countdown: ใช้ %%EXP_TS%% เป็น placeholder แล้ว replace ภายหลัง
+countdown_html = """
 <div id='timer' style='font-size:1.4rem;font-weight:700'></div>
 <script>
-  const exp = {exp};
+  const exp = EXP_TS_PLACEHOLDER;
   const el = document.getElementById('timer');
-  function tick(){{
+  function tick() {
     const now = Math.floor(Date.now()/1000);
     let remain = Math.max(0, exp - now);
     const mm = String(Math.floor(remain/60)).padStart(2,'0');
     const ss = String(remain%60).padStart(2,'0');
     el.textContent = `Time left: ${mm}:${ss}`;
-  }}
+  }
   tick();
   setInterval(tick, 1000);
 </script>
-""".format(exp=exp_ts), unsafe_allow_html=True)
+""".replace("EXP_TS_PLACEHOLDER", str(exp_ts))
+
+st.markdown(countdown_html, unsafe_allow_html=True)
+
 
 st.info('ให้เข้าหน้า Secondary ผ่าน URL ของระบบคุณเองภายในเวลาที่กำหนด')
 st.markdown('ตัวอย่างโครง URL (คัดลอกไปใช้ในระบบคุณ):')
