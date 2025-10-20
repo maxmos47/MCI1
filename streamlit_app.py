@@ -186,7 +186,10 @@ def _format_hhmmss(seconds: int) -> str:
 st.markdown("### 🩺 Patient Information")
 
 if not GAS_WEBAPP_URL:
-    st.error("Missing GAS web app URL. Add it to secrets as:\\n\\n[gas]\\nwebapp_url = \\"https://script.google.com/macros/s/XXX/exec\\"")
+    st.error(
+    "Missing GAS web app URL. Add it to secrets as:\n\n"
+    "[gas]\nwebapp_url = \"https://script.google.com/macros/s/XXX/exec\""
+)
     st.stop()
 
 qp = get_query_params()
