@@ -250,7 +250,7 @@ if not st.session_state["locked"]:
     components.html(
         f"""
         <div class="countdown">
-          <span class="badge">⏳ Server timer</span>
+          <span class="badge">⏳ คนไข้กำลังจะเสียชีวิตใน</span>
           <span id="digits" class="digits big">{initial_digits}</span>
           <div style="margin-top:10px">
             <progress id="pg" max="{progress_max}" value="{progress_value}" style="width:100%"></progress>
