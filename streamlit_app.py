@@ -136,7 +136,7 @@ def render_kv_grid(df_one_row: pd.DataFrame, title: str = "", cols: int = 2):
 # =========================
 # Main
 # =========================
-st.markdown("### 🩺 Patient Information — Primary")
+st.markdown("### 🩺 Patient Information")
 
 if not GAS_WEBAPP_URL:
     st.error(
@@ -197,7 +197,7 @@ now = utc_now_ts()
 remaining = max(0, (end_epoch - now) if end_epoch else 0)
 
 # ---------- Show patient + countdown ----------
-render_kv_grid(df_ak, title="Patient (A–K)", cols=2)
+render_kv_grid(df_ak, title="Patient", cols=2)
 
 initial_digits = fmt_hms(remaining)
 progress_value = max(0, (origin_seconds - remaining) if origin_seconds else 0)
@@ -246,7 +246,7 @@ components.html(
 if mode == "view":
     render_kv_grid(df_al, title="Patient (A–L)", cols=2)
     st.success("Triage เรียบร้อย")
-    if st.button("Edit this row again"):
+    if st.button("Triage this patient again"):
         set_query_params(row=str(row), mode="edit")
         st.rerun()
 else:
