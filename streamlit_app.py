@@ -1,33 +1,35 @@
+import time
+import json
+import hmac
+import hashlib
+import base64
+from datetime import datetime, timezone
+from typing import Dict, Any
+
 import streamlit as st
 import pandas as pd
 import requests
-import time
-from datetime import timedelta
+import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Patient Dashboard", page_icon="🩺", layout="centered")
+st.set_page_config(page_title="Patient Dashboard (Primary)", page_icon="🩺", layout="centered")
 
 # =========================
 # CONFIG
 # =========================
-# ใส่ค่าใน .streamlit/secrets.toml ตอน deploy บน Streamlit Cloud:
+# .streamlit/secrets.toml
 # [gas]
-# webapp_url = "https://script.google.com/macros/s/AKfycb.../exec"
-# token = "MY_SHARED_SECRET"     # (optional, หากฝั่ง GAS ตั้งตรวจ token)
+# webapp_url = "https://script.google.com/macros/s/XXXXX/exec"
+# token = "MY_SHARED_SECRET"
 GAS_WEBAPP_URL = st.secrets.get("gas", {}).get("webapp_url", "")
-TOKEN = st.secrets.get("gas", {}).get("token", "")  # optional shared secret
+TOKEN = st.secrets.get("gas", {}).get("token", "")
 
-# ชอยส์ของคอลัมน์ L (Primary triage)
 ALLOWED_L = ["Minor", "Delayed", "Immediate", "Decreased"]
-
-# ชื่อหัวคอลัมน์ Q ในชีต (ต้องให้ฝั่ง GAS ส่งหัวคอลัมน์นี้กลับมา)
-TIMER_COLUMN_NAME = "Timer"   # = คอลัมน์ Q
-
+SECONDARY_APP_BASE = "https://eprj-mci-secondarytriage.streamlit.app/"
 
 # =========================
-# Helpers for query params
+# Helpers
 # =========================
-def get_query_params():
-    """รองรับทั้ง Streamlit เวอร์ชันใหม่ (st.query_params) และเก่า (experimental_get_query_params)."""
+def get_query_params() -> Dict[str, str]:
     try:
         q = st.query_params
         return {k: v for k, v in q.items()}
@@ -41,6 +43,14 @@ def set_query_params(**kwargs):
     except Exception:
         st.experimental_set_query_params(**kwargs)
 
+def utc_now_ts() -> int:
+    return int(datetime.now(timezone.utc).timestamp())
+
+def fmt_hms(secs: int) -> str:
+    secs = max(0, int(secs))
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 # =========================
 # GAS calls
@@ -61,34 +71,49 @@ def gas_update_L(row: int, value: str) -> dict:
     r.raise_for_status()
     return r.json()
 
+def gas_start_timer(row: int) -> dict:
+    payload = {"action": "start_timer", "row": str(row)}
+    if TOKEN:
+        payload["token"] = TOKEN
+    r = requests.post(GAS_WEBAPP_URL, data=payload, timeout=20)
+    r.raise_for_status()
+    return r.json()
 
 # =========================
-# Card UI (mobile-friendly) — template style
+# Styles
 # =========================
-st.markdown("""
+st.markdown(
+    """
 <style>
-.kv-card{border:1px solid #e5e7eb;padding:12px;border-radius:14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,0.06);background:#fff;}
+.kv-card{border:1px solid #e5e7eb;padding:12px;border-radius:14px;margin-bottom:10px;
+         box-shadow:0 1px 4px rgba(0,0,0,0.06);background:#fff;}
 .kv-label{font-size:0.9rem;color:#6b7280;margin-bottom:2px;}
 .kv-value{font-size:1.05rem;font-weight:600;word-break:break-word;}
+.countdown{border:1px dashed #94a3b8;padding:12px;border-radius:12px;background:#f8fafc}
+.badge{font-size:0.8rem;background:#e2e8f0;border-radius:999px;padding:4px 10px;color:#334155;margin-right:10px}
+.digits{font-weight:800;letter-spacing:1px;line-height:1}
+.digits.big{font-size:2.8rem}
 @media (max-width: 640px){
   .kv-card{padding:12px;}
   .kv-value{font-size:1.06rem;}
+  .digits.big{font-size:2.2rem}
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 def _pairs_from_row(df_one_row: pd.DataFrame):
     s = df_one_row.iloc[0]
-    pairs = []
+    items = []
     for col in df_one_row.columns:
-        val = s[col]
-        if pd.isna(val):
-            val = ""
-        pairs.append((str(col), str(val)))
-    return pairs
+        v = s[col]
+        if pd.isna(v):
+            v = ""
+        items.append((str(col), str(v)))
+    return items
 
-def render_kv_grid(df_one_row: pd.DataFrame, title: str = "", cols: int = 3):
-    # เทมเพลตเดิม: card-grid 3 คอลัมน์ บนมือถือยังอ่านง่าย (Streamlit จะ wrap เอง)
+def render_kv_grid(df_one_row: pd.DataFrame, title: str = "", cols: int = 2):
     if title:
         st.subheader(title)
     items = _pairs_from_row(df_one_row)
@@ -108,97 +133,25 @@ def render_kv_grid(df_one_row: pd.DataFrame, title: str = "", cols: int = 3):
                     unsafe_allow_html=True
                 )
 
-
 # =========================
-# Timer helpers
+# Main
 # =========================
-def _parse_timer_to_seconds(v) -> int:
-    """
-    แปลงค่าที่อ่านมาจากคอลัมน์ Q ให้เป็นวินาที.
-    รองรับ: 'HH:MM:SS', 'MM:SS', '10m', '10 min', '45s', 300 (วินาที),
-           Excel time เช่น 0.0104 (ส่วนของ 1 วัน)
-    """
-    if v is None:
-        return 0
-    if isinstance(v, (int, float)):
-        # ถ้าค่าน้อยกว่า 1 และมากกว่า 0 => อาจเป็น excel time (ส่วนของ 1 วัน)
-        if isinstance(v, float) and 0 < v < 1:
-            return int(round(v * 86400))
-        return max(0, int(round(v)))
-
-    s = str(v).strip().lower()
-
-    # หน่วยแบบย่อ
-    if s.endswith("s"):
-        try:
-            return max(0, int(float(s[:-1])))
-        except:
-            pass
-    if s.endswith("sec"):
-        try:
-            return max(0, int(float(s[:-3])))
-        except:
-            pass
-    if s.endswith("m") or "min" in s:
-        num = s.replace("min", "").replace(" ", "").replace("m", "")
-        try:
-            return max(0, int(float(num) * 60))
-        except:
-            pass
-    if s.endswith("h") or "hr" in s or "hour" in s or "hours" in s:
-        num = (s.replace("hours", "")
-                 .replace("hour", "")
-                 .replace("hr", "")
-                 .replace(" ", "")
-                 .replace("h", ""))
-        try:
-            return max(0, int(float(num) * 3600))
-        except:
-            pass
-
-    # รูปแบบมี ":" -> HH:MM:SS หรือ MM:SS
-    if ":" in s:
-        parts = [p for p in s.split(":") if p != ""]
-        try:
-            parts = [int(float(p)) for p in parts]
-            if len(parts) == 3:  # HH:MM:SS
-                h, m, sec = parts
-                return max(0, h*3600 + m*60 + sec)
-            if len(parts) == 2:  # MM:SS
-                m, sec = parts
-                return max(0, m*60 + sec)
-        except:
-            pass
-
-    # อย่างสุดท้าย: ตีความเป็นวินาที
-    try:
-        return max(0, int(round(float(s))))
-    except:
-        return 0
-
-def _format_hhmmss(seconds: int) -> str:
-    return str(timedelta(seconds=max(0, int(seconds))))
-
-
-# =========================
-# Main UI (template-style)
-# =========================
-st.markdown("### 🩺 Patient Information")
+st.markdown("### 🩺 Patient Information — Primary")
 
 if not GAS_WEBAPP_URL:
     st.error(
-    "Missing GAS web app URL. Add it to secrets as:\n\n"
-    "[gas]\nwebapp_url = \"https://script.google.com/macros/s/XXX/exec\""
-)
+        """Missing GAS web app URL. Add it to secrets as:
+
+[gas]
+webapp_url = "https://script.google.com/macros/s/XXX/exec"
+token = "MY_SHARED_SECRET"
+"""
+    )
     st.stop()
 
 qp = get_query_params()
 row_str = qp.get("row", "1")
 mode = qp.get("mode", "edit")  # "edit" or "view"
-lock = qp.get("lock", "0")     # รองรับพารามิเตอร์เทมเพลตเดิม ?lock=1 เพื่อเข้าสู่โหมดดู (ล็อก)
-
-if lock == "1":
-    mode = "view"
 
 try:
     row = int(row_str)
@@ -207,7 +160,7 @@ try:
 except ValueError:
     row = 1
 
-# เรียก GAS
+# Fetch
 try:
     data = gas_get_row(row=row)
 except Exception as e:
@@ -218,89 +171,100 @@ if data.get("status") != "ok":
     st.error(f"GAS error: {data}")
     st.stop()
 
-# สร้าง DataFrame จากผลลัพธ์ GAS
-df_ak = pd.DataFrame([data.get("A_K", {})])   # A–K (ข้อมูลก่อนฟอร์ม)
-df_al = pd.DataFrame([data.get("A_L", {})])   # A–L (ข้อมูลหลังอัปเดต)
-max_row = data.get("max_rows", 1)
+df_ak = pd.DataFrame([data.get("A_K", {})])
+df_al = pd.DataFrame([data.get("A_L", {})])
 current_L = data.get("current_L", "")
 
-# ----- อ่าน Timer (Column Q) -----
-timer_raw = data.get("timer") or data.get("Timer")
-if timer_raw is None:
+# ---------- Timer server-state ----------
+origin_seconds = int(data.get("timer_seconds", 0) or 0)
+t0_epoch = int(data.get("t0_epoch", 0) or 0)
+end_epoch = int(data.get("end_epoch", 0) or 0)
+
+# Start timer on server once if needed (idempotent)
+if origin_seconds > 0 and end_epoch == 0:
     try:
-        if TIMER_COLUMN_NAME in df_al.columns:
-            timer_raw = df_al.iloc[0][TIMER_COLUMN_NAME]
-    except Exception:
-        pass
-if timer_raw is None:
-    q_dict = data.get("Q") or data.get("M_Q") or {}
-    if isinstance(q_dict, dict):
-        timer_raw = q_dict.get("value") or q_dict.get(TIMER_COLUMN_NAME)
+        res = gas_start_timer(row=row)
+        if res.get("status") == "ok":
+            t0_epoch = int(res.get("t0_epoch", t0_epoch) or 0)
+            end_epoch = int(res.get("end_epoch", end_epoch) or 0)
+        else:
+            st.warning(f"Cannot start timer on server: {res}")
+    except Exception as e:
+        st.warning(f"start_timer failed: {e}")
 
-timer_seconds = _parse_timer_to_seconds(timer_raw)
+# Compute remaining from server end_epoch
+now = utc_now_ts()
+remaining = max(0, (end_epoch - now) if end_epoch else 0)
 
-# โครงหน้าเป็นซ้าย-ขวา (ขวาแคบไว้สำหรับ Timer) — เทมเพลตเดิม
-left_col, right_col = st.columns([3, 1])
+# ---------- Show patient + countdown ----------
+render_kv_grid(df_ak, title="Patient (A–K)", cols=2)
 
-with left_col:
-    # --------- UI based on mode ---------
-    if mode == "view":
-        # โหมดหลัง Submit / lock=1 : แสดงข้อมูล A–L (หรือรวมทุกคอลัมน์ตาม GAS) แบบ card-grid 3 คอลัมน์
-        render_kv_grid(df_al, title="Patient", cols=3)
-        st.success("Triage เรียบร้อย")
-        if st.button("Edit this row again"):
-            # กลับสู่โหมดแก้ไข (ปลดล็อก)
-            set_query_params(row=str(row), mode="edit", lock="0")
-            st.rerun()
-    else:
-        # โหมดแก้ไข: โชว์ A–K ก่อน แล้วตามด้วยฟอร์มแก้ L
-        render_kv_grid(df_ak, title="Patient", cols=3)
+initial_digits = fmt_hms(remaining)
+progress_value = max(0, (origin_seconds - remaining) if origin_seconds else 0)
+progress_max = max(1, origin_seconds if origin_seconds > 0 else 1)
 
-        idx = ALLOWED_L.index(current_L) if current_L in ALLOWED_L else 0
-        with st.form("update_l_form", border=True):
-            st.markdown("### Primary triage")
-            new_L = st.selectbox(
-                "Select a value for triage",
-                ALLOWED_L,
-                index=idx,
-                help="Allowed: Minor, Delayed, Immediate, Decreased"
-            )
-            submitted = st.form_submit_button("Submit")
-            if submitted:
-                try:
-                    res = gas_update_L(row=row, value=new_L)
-                    if res.get("status") == "ok":
-                        # หลัง Submit: เปิดโหมด lock=1 (เหมือนเทมเพลตเดิม ?lock=1)
-                        set_query_params(row=str(row), mode="view", lock="1")
-                        st.rerun()
-                    else:
-                        st.error(f"Update failed: {res}")
-                except Exception as e:
-                    st.error(f"Failed to update via GAS: {e}")
+components.html(
+    f"""
+    <div class="countdown">
+      <span class="badge">⏳ Server timer</span>
+      <span id="digits" class="digits big">{initial_digits}</span>
+      <div style="margin-top:10px">
+        <progress id="pg" max="{progress_max}" value="{progress_value}" style="width:100%"></progress>
+      </div>
+    </div>
+    <script>
+      (function() {{
+        let remaining = {remaining};
+        const origin = {origin_seconds};
+        const digits = document.getElementById('digits');
+        const pg = document.getElementById('pg');
+        function fmt(n) {{ return String(n).padStart(2, '0'); }}
+        function render() {{
+          let s = Math.max(0, Math.floor(remaining));
+          let h = Math.floor(s/3600);
+          let m = Math.floor((s%3600)/60);
+          let ss = s%60;
+          digits.textContent = `${{fmt(h)}}:${{fmt(m)}}:${{fmt(ss)}}`;
+          if (origin > 0 && pg) {{
+            pg.max = origin;
+            pg.value = Math.min(origin, Math.max(0, origin - s));
+          }}
+        }}
+        render();
+        const intv = setInterval(() => {{
+          remaining -= 1;
+          if (remaining <= 0) {{ remaining = 0; render(); clearInterval(intv); return; }}
+          render();
+        }}, 1000);
+      }})();
+    </script>
+    """,
+    height=160,
+)
 
-with right_col:
-    # แถบ Timer ทางขวา (อ่านจากคอลัมน์ Q)
-    st.markdown("#### ⏳ Timer")
-    if timer_seconds <= 0:
-        st.info("No timer (Q) or invalid value.")
-    else:
-        # ตั้ง deadline ไว้ใน session_state เพื่อให้นับต่อเนื่องแม้แอปรันซ้ำ
-        key_id = f"deadline_row{row}_sec{timer_seconds}"
-        now = time.time()
-        if "countdown_deadline" not in st.session_state or st.session_state.get("countdown_key") != key_id:
-            st.session_state["countdown_key"] = key_id
-            st.session_state["countdown_deadline"] = now + timer_seconds
+# ---------- Edit / View modes ----------
+if mode == "view":
+    render_kv_grid(df_al, title="Patient (A–L)", cols=2)
+    st.success("Triage เรียบร้อย")
+    if st.button("Edit this row again"):
+        set_query_params(row=str(row), mode="edit")
+        st.rerun()
+else:
+    idx = ALLOWED_L.index(current_L) if current_L in ALLOWED_L else 0
+    with st.form("update_l_form", border=True):
+        st.markdown("### Primary triage")
+        new_L = st.selectbox("Select a value for triage", ALLOWED_L, index=idx)
+        submitted = st.form_submit_button("Submit")
+        if submitted:
+            try:
+                res = gas_update_L(row=row, value=new_L)
+                if res.get("status") == "ok":
+                    set_query_params(row=str(row), mode="view")
+                    st.rerun()
+                else:
+                    st.error(f"Update failed: {res}")
+            except Exception as e:
+                st.error(f"Failed to update via GAS: {e}")
 
-        deadline = st.session_state["countdown_deadline"]
-        placeholder = st.empty()
-
-        # เพื่อไม่บล็อกแอปนานเกินไป จำกัดการวิ่งสดสูงสุด 1 ชั่วโมงต่อครั้ง
-        max_live_secs = min(60*60, timer_seconds)
-        for _ in range(max_live_secs + 1):
-            remaining = int(round(deadline - time.time()))
-            if remaining <= 0:
-                placeholder.error("00:00:00")
-                break
-            # ใช้ success เพื่อกรอบเขียวสไตล์เทมเพลตเดิม
-            placeholder.success(_format_hhmmss(remaining))
-            time.sleep(1)
+# ---------- Link to Secondary (no token needed) ----------
+st.link_button("➡️ Open Secondary triage (no token)", f"{SECONDARY_APP_BASE}?row={row}&lock=1}", use_container_width=True)
