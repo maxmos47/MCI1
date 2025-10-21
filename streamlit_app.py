@@ -267,4 +267,4 @@ else:
                 st.error(f"Failed to update via GAS: {e}")
 
 # ---------- Link to Secondary (no token needed) ----------
-st.link_button("➡️ Open Secondary triage (no token)", f"{SECONDARY_APP_BASE}?row={row}&lock=1}", use_container_width=True)
+st.link_button("➡️ Open Secondary triage (no token)", f"{SECONDARY_APP_BASE}?row={row}&lock=1", use_container_width=True)
