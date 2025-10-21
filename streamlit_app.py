@@ -24,7 +24,7 @@ GAS_WEBAPP_URL = st.secrets.get("gas", {}).get("webapp_url", "")
 TOKEN = st.secrets.get("gas", {}).get("token", "")
 
 ALLOWED_L = ["Minor", "Delayed", "Immediate", "Decreased"]
-SECONDARY_APP_BASE = "https://eprj-mci2.streamlit.app/"
+SECONDARY_APP_BASE = "https://eprj-mci-secondarytriage.streamlit.app/"
 
 # =========================
 # Helpers
